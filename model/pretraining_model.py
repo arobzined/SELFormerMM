@@ -8,49 +8,37 @@ import numpy as np
 from transformers import RobertaConfig, RobertaTokenizerFast, RobertaModel
 from revised_losses import SINCERELoss
 import random
+import matplotlib.pyplot as plt
 
-######################################
-# 1) Dummy CSV dosyası oluşturma (2 örnek - SELFIES formatında)
-######################################
-def create_dummy_csv(csv_path="dummy_4.csv"):
+
+def read_selfies_column(csv_path):
+    try:
+        df = pd.read_csv(csv_path, header=None)
+        df = df.iloc[1:].reset_index(drop=True)  # Remove first row and reset index
+        
+        print("Updated CSV Shape:", df.shape)
+        return df[[5]]
+    except FileNotFoundError:
+        print(f"Error: The file at path '{csv_path}' was not found.")
+    except pd.errors.EmptyDataError:
+        print("Error: The CSV file is empty.")
+    except ValueError as e:
+        print(f"Error: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
+
+def read_embeddings_from_npy(graph_path, text_path, kg_path):
     """
-    Dört örnekten oluşan CSV:
-    1) Metin: [C][H][N][O], Label: 0
-    2) Metin: [C][C][O][H], Label: 1
+    Reads embeddings from .npy files.
     """
-    df = pd.DataFrame({
-        "text": ["[C][H][N][O]", "[C][C][O][H]"],
-        "label": [0, 1]
-    })
-    df.to_csv(csv_path, index=False, header=False)
-    print(f"'{csv_path}' oluşturuldu. İçerik:")
-    print(df)
+    graph_embeddings = np.load(graph_path).astype(np.float32).squeeze(axis=1)
+    text_embeddings = np.load(text_path).astype(np.float32)
+    kg_embeddings = np.load(kg_path).astype(np.float32)
 
-######################################
-# 2) Dummy Embeddings (Graph, Text, KG)
-######################################
-def create_dummy_embeddings():
-    """
-    2 örnek, her biri 4 boyutlu graph, text ve kg embedding.
-    """
-    graph_embeddings = np.array([
-        [0.1, 0.2, 0.3, 0.4],
-        [0.9, 0.8, 0.7, 0.6]
-    ], dtype=np.float32)
-
-    text_embeddings = np.array([
-        [0.4, 0.3, 0.2, 0.1],
-        [0.6, 0.7, 0.8, 0.9]
-    ], dtype=np.float32)
-
-    kg_embeddings = np.array([
-        [0.5, 0.5, 0.5, 0.5],
-        [0.1, 0.1, 0.1, 0.1]
-    ], dtype=np.float32)
-
-    print("Graph Embeddings:", graph_embeddings)
-    print("Text Embeddings:", text_embeddings)
-    print("KG Embeddings:", kg_embeddings)
+    print("Graph Embeddings Shape:", graph_embeddings.shape)
+    print("Text Embeddings Shape:", text_embeddings.shape)
+    print("KG Embeddings Shape:", kg_embeddings.shape)
 
     return graph_embeddings, text_embeddings, kg_embeddings
 
@@ -59,13 +47,15 @@ def create_dummy_embeddings():
 ######################################
 class CustomDataset(Dataset):
     def __init__(self, csv_path, graph_embeddings, text_embeddings, kg_embeddings, tokenizer, max_len):
-        self.data = pd.read_csv(csv_path, header=None)
+        self.data = csv_path
         self.tokenizer = tokenizer
         self.max_len = max_len
         self.graph_embeddings = graph_embeddings
         self.text_embeddings = text_embeddings
         self.kg_embeddings = kg_embeddings
         
+        print(len(self.data))
+        print(len(self.graph_embeddings))
         assert len(self.data) == len(self.graph_embeddings), \
             "CSV satır sayısı ile graph embeddings sayısı eşleşmiyor!"
 
@@ -102,31 +92,40 @@ class CustomDataset(Dataset):
 # 4) Multimodal Model
 ######################################
 class MultimodalRoberta(nn.Module):
-    def __init__(self, config, embedding_dim, num_labels=2):
+    def __init__(self, config):
         super().__init__()
+        config.hidden_size = 768
         self.roberta = RobertaModel(config)
-        self.graph_proj = nn.Linear(embedding_dim, config.hidden_size)
-        self.text_proj = nn.Linear(embedding_dim, config.hidden_size)
-        self.kg_proj = nn.Linear(embedding_dim, config.hidden_size)
+        self.graph_proj = nn.Linear(512, config.hidden_size)
+        self.text_proj = nn.Linear(768, config.hidden_size)
+        self.kg_proj = nn.Linear(64, config.hidden_size)
         self.combined_fc = nn.Linear(config.hidden_size * 4, config.hidden_size)
-        self.classifier = nn.Linear(config.hidden_size, num_labels)
         # graph, text, kg, selformer -> her biri aynı size matris, her bir molekül için de, 4 adet aynı size matris.
 
     def forward(self, input_ids, attention_mask, graph_emb, text_emb, kg_emb):
+        # Get RoBERTa output
         outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
         text_roberta_emb = outputs.last_hidden_state[:, 0, :]  # [B, hidden_size]
-        
-        # Project graph, text, and KG embeddings
+        # print("Text (RoBERTa CLS embedding) size:", text_roberta_emb.size())
+
+        # Project graph embedding to hidden size
         graph_hidden = self.graph_proj(graph_emb)  # [B, hidden_size]
-        text_hidden = self.text_proj(text_emb)    # [B, hidden_size]
-        kg_hidden = self.kg_proj(kg_emb)          # [B, hidden_size]
-        
-        # Concatenate all modalities: [B * modalities, hidden_size]
+        # print("Graph embedding size after projection:", graph_hidden.size())
+
+        # Project text embedding to hidden size
+        text_hidden = self.text_proj(text_emb)  # [B, hidden_size]
+        # print("Text embedding size after projection:", text_hidden.size())
+
+        # Project KG embedding to hidden size
+        kg_hidden = self.kg_proj(kg_emb)  # [B, hidden_size]
+        # print("Knowledge Graph embedding size after projection:", kg_hidden.size())
+
+        # Concatenate all modalities
         combined = torch.cat([text_roberta_emb, graph_hidden, text_hidden, kg_hidden], dim=0)
+        # print("Combined tensor size:", combined.size())
+        
         return combined
 
-        # batch size içinde, her bir molkülü bir labela sahip oalcak şekilde işlem yaptık.
-        # output size -> [batch * number of views, dimention]
 
 ######################################
 # 5) Eğitim Fonksiyonu
@@ -135,10 +134,10 @@ def train_and_save_roberta_model(
     csv_path, graph_embeddings, text_embeddings, kg_embeddings, tokenizer_name="roberta-base", # bu model mi kullanılmış kontrol et.
     save_path="multimodal_roberta.pt"
 ):
-    max_len = 16
-    batch_size = 1
-    num_epochs = 2
-    lr = 1e-4
+    max_len = 32
+    batch_size = 20
+    num_epochs = 20
+    lr = 2e-5
 
     config = RobertaConfig.from_pretrained(tokenizer_name)
     tokenizer = RobertaTokenizerFast.from_pretrained(tokenizer_name)
@@ -147,7 +146,8 @@ def train_and_save_roberta_model(
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     embedding_dim = graph_embeddings.shape[1]
-    model = MultimodalRoberta(config, embedding_dim=embedding_dim, num_labels=2)
+    print(embedding_dim)
+    model = MultimodalRoberta(config)
 
     sincere_loss = SINCERELoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr)
@@ -157,6 +157,8 @@ def train_and_save_roberta_model(
     print("Device:", device)
 
     model.train()
+
+    loss_values = []
     for epoch in range(num_epochs):
         total_loss = 0.0
         for step, batch in enumerate(dataloader):
@@ -168,7 +170,9 @@ def train_and_save_roberta_model(
             
             # Dynamically create labels for the batch
             batch_size = input_ids.size(0)
-            labels = torch.arange(batch_size, dtype=torch.long, device=device).repeat_interleave(3)  # 3 modalities
+            labels = torch.arange(batch_size, dtype=torch.long, device=device).repeat(4)  # modalities [0,1,2,3,...,0,1,2,..]
+
+            #print(labels)
 
             # Forward pass
             logits = model(input_ids, attention_mask, graph_emb, text_emb, kg_emb)
@@ -179,19 +183,37 @@ def train_and_save_roberta_model(
             optimizer.step()
 
             total_loss += loss.item()
-            print(f"Epoch {epoch+1}, Step {step+1}, Loss={loss.item():.4f}")
         print(f"Epoch {epoch+1} bitti. Avg Loss={total_loss/len(dataloader):.4f}")
-
+        loss_values.append(total_loss / len(dataloader))
     torch.save(model.state_dict(), save_path)
     print(f"Model kaydedildi: {save_path}")
+
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(1, len(loss_values) + 1), loss_values, marker='o', linestyle='-', color='blue')
+    plt.title('Training Loss Over Epochs')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.grid(True)
+    plt.xticks(range(1, len(loss_values) + 1))
+
+    # Save the figure to a file (PNG, PDF, JPG, etc.)
+    plt.savefig("loss_plot.png", dpi=300, bbox_inches='tight')
+
 
 ######################################
 # 6) main
 ######################################
 if __name__ == "__main__":
-    csv_name = "dummy_4.csv"
-    create_dummy_csv(csv_path=csv_name)
-    graph_embeddings, text_embeddings, kg_embeddings = create_dummy_embeddings()
+    csv_name = "/home/g3bbmproject/main_folder/KG/kg.pt/data_with_selfies.csv"
+    csv_name = read_selfies_column(csv_path=csv_name)
+    
+    kg_path = "/home/g3bbmproject/main_folder/traning/data/6k_kg_embed.npy"
+    text_path = "/home/g3bbmproject/main_folder/traning/data/text_embeddings_6k.npy"
+    graph_path = "/home/g3bbmproject/main_folder/traning/data/graph_embeddings_6k.npy"
+
+    graph_embeddings, text_embeddings, kg_embeddings = read_embeddings_from_npy(graph_path, text_path, kg_path)
+
     train_and_save_roberta_model(
         csv_path=csv_name,
         graph_embeddings=graph_embeddings,
