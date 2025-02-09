@@ -49,7 +49,7 @@ class CustomDataset(Dataset):
     def __init__(self, csv_path, graph_embeddings, text_embeddings, kg_embeddings, tokenizer, max_len):
         self.data = csv_path
         self.tokenizer = tokenizer
-        self.max_len = max_len
+        self.max_len = max_len     # TODO: value calculated by tokenizer MUST ADD ın here
         self.graph_embeddings = graph_embeddings
         self.text_embeddings = text_embeddings
         self.kg_embeddings = kg_embeddings
@@ -68,7 +68,7 @@ class CustomDataset(Dataset):
         
         encoding = self.tokenizer.encode_plus(
             text,
-            max_length=self.max_len,
+            max_length=self.max_len, # TODO: value calculated by tokenizer MUST ADD ın here
             truncation=True,
             padding="max_length"
         )
@@ -102,28 +102,37 @@ class MultimodalRoberta(nn.Module):
         self.combined_fc = nn.Linear(config.hidden_size * 4, config.hidden_size)
         # graph, text, kg, selformer -> her biri aynı size matris, her bir molekül için de, 4 adet aynı size matris.
 
-    def forward(self, input_ids, attention_mask, graph_emb, text_emb, kg_emb):
+    def forward(self, input_ids, attention_mask, graph_emb=None, text_emb=None, kg_emb=None):
         # Get RoBERTa output
         outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
         text_roberta_emb = outputs.last_hidden_state[:, 0, :]  # [B, hidden_size]
-        # print("Text (RoBERTa CLS embedding) size:", text_roberta_emb.size())
 
-        # Project graph embedding to hidden size
-        graph_hidden = self.graph_proj(graph_emb)  # [B, hidden_size]
-        # print("Graph embedding size after projection:", graph_hidden.size())
 
-        # Project text embedding to hidden size
-        text_hidden = self.text_proj(text_emb)  # [B, hidden_size]
-        # print("Text embedding size after projection:", text_hidden.size())
+        # TODO: FIX ME
+        # If graph_emb is missing (None), fill with random
+        if none in graph_emb is None: # replace these none with looking up the array and replace them with randn, since we are giving the 
+                                      # embeddings batch by batch, and every modality comes as a array in here, so it must look up the array.
+            batch_size = input_ids.size(0)
+            # Adjust this shape (512) to match your actual graph embedding dimension
+            graph_emb = torch.randn(batch_size, 512, device=input_ids.device, dtype=torch.float)
+        graph_hidden = self.graph_proj(graph_emb)
 
-        # Project KG embedding to hidden size
-        kg_hidden = self.kg_proj(kg_emb)  # [B, hidden_size]
-        # print("Knowledge Graph embedding size after projection:", kg_hidden.size())
+        # If text_emb is missing (None), fill with random
+        if text_emb is None:
+            batch_size = input_ids.size(0)
+            # Adjust this shape (768) to match your actual text embedding dimension
+            text_emb = torch.randn(batch_size, 768, device=input_ids.device, dtype=torch.float)
+        text_hidden = self.text_proj(text_emb)
 
-        # Concatenate all modalities
+        # If kg_emb is missing (None), fill with random
+        if kg_emb is None:
+            batch_size = input_ids.size(0)
+            # Adjust this shape (64) to match your actual KG embedding dimension
+            kg_emb = torch.randn(batch_size, 64, device=input_ids.device, dtype=torch.float)
+        kg_hidden = self.kg_proj(kg_emb)
+
+        # Concatenate all modalities along dim=0 (to produce 4 * batch_size rows)
         combined = torch.cat([text_roberta_emb, graph_hidden, text_hidden, kg_hidden], dim=0)
-        # print("Combined tensor size:", combined.size())
-        
         return combined
 
 
@@ -131,7 +140,7 @@ class MultimodalRoberta(nn.Module):
 # 5) Eğitim Fonksiyonu
 ######################################
 def train_and_save_roberta_model(
-    csv_path, graph_embeddings, text_embeddings, kg_embeddings, tokenizer_name="roberta-base", # bu model mi kullanılmış kontrol et.
+    csv_path, graph_embeddings, text_embeddings, kg_embeddings, model_file, # bu model mi kullanılmış kontrol et.
     save_path="multimodal_roberta.pt"
 ):
     max_len = 32
@@ -139,15 +148,16 @@ def train_and_save_roberta_model(
     num_epochs = 20
     lr = 2e-5
 
-    config = RobertaConfig.from_pretrained(tokenizer_name)
-    tokenizer = RobertaTokenizerFast.from_pretrained(tokenizer_name)
+    config = RobertaConfig.from_pretrained(model_file)
+    config.output_hidden_states = True
+    tokenizer = RobertaTokenizerFast.from_pretrained(model_file)
 
     dataset = CustomDataset(csv_path, graph_embeddings, text_embeddings, kg_embeddings, tokenizer, max_len)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     embedding_dim = graph_embeddings.shape[1]
     print(embedding_dim)
-    model = MultimodalRoberta(config)
+    model = RobertaModel.from_pretrained(model_file, config=config)
 
     sincere_loss = SINCERELoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr)
@@ -205,6 +215,13 @@ def train_and_save_roberta_model(
 # 6) main
 ######################################
 if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_file", required=True, metavar="<str>", type=str, help="Name of the pretrained model.")
+    args = parser.parse_args()
+
+    model_file = args.model_file
+
     csv_name = "/home/g3bbmproject/main_folder/KG/kg.pt/data_with_selfies.csv"
     csv_name = read_selfies_column(csv_path=csv_name)
     
@@ -219,7 +236,7 @@ if __name__ == "__main__":
         graph_embeddings=graph_embeddings,
         text_embeddings=text_embeddings,
         kg_embeddings=kg_embeddings,
-        tokenizer_name="roberta-base",
+        model_file=model_file,
         save_path="multimodal_roberta.pt"
     )
     print("Tüm işlem tamamlandı!")
