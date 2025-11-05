@@ -1,69 +1,71 @@
+import os
 import pandas as pd
 import numpy as np
-from unimol_tools import UniMolRepr
 import torch
+import time
+from datetime import datetime
+from unimol_tools import UniMolRepr
 
-# Initialize UniMol Model with GPU support
 unimol_model = UniMolRepr(data_type='molecule', remove_hs=False, use_gpu=True)
 
-# Define the function to generate UniMol embeddings
-def get_unimol_embeddings(smiles, model):
-    """
-    Generate UniMol embeddings for a given SMILES string.
-    :param smiles: A SMILES string representing a molecule.
-    :param model: UniMolRepr model instance.
-    :return: UniMol CLS token representation as a list.
-    """
+def get_unimol_embeddings_batch(smiles_list, model):
     try:
-        unimol_repr = model.get_repr(smiles, return_atomic_reprs=True)  # Generate embeddings
-        cls_repr = unimol_repr['cls_repr']  # CLS token embedding (molecular representation)
-        return np.array(cls_repr)
+        batch_repr = model.get_repr(smiles_list, return_atomic_reprs=True)
+        cls_reprs = batch_repr['cls_repr']
+        return np.array(cls_reprs)
     except Exception as e:
-        print(f"Error embedding SMILES {smiles}: {e}")
-        return None  # Return None if an error occurs
+        print(f"Error embedding batch: {e}")
+        return None
 
-# Load the CSV file
-input_file = "/home/g3bbmproject/main_folder/KG/kg.pt/final_matched_data_with_embeddings.csv"
-df = pd.read_csv(input_file)
+def process_folder_unimol(folder_path, batch_size=2000):
+    """
+    Walk through the folder and process each CSV file ending with 'filtered'.
+    Embeddings are saved in the same folder with '_graph_embedding.npy' added to the filename.
+    """
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            if not file.endswith("filtered.csv") and not file.endswith("mock.csv"):
+                file_path = os.path.join(root, file)
+                print(f"Processing file: {file_path}")
+                try:
+                    df = pd.read_csv(file_path)
+                    column_name = 'smiles'
+                    if column_name not in df.columns:
+                        column_name = 'mol'
 
-# Ensure the 'smiles' column exists
-if 'smiles' not in df.columns:
-    raise ValueError("The input file does not contain a 'smiles' column.")
+                        if column_name not in df.columns:
+                            raise ValueError("'smiles' column not found in the CSV file.")
 
-# Define chunk size
-chunk_size = 100000  # Process 100,000 rows at a time
+                    df = df.dropna(subset=[column_name])
+                    smiles_list = df[column_name].tolist()
+                    print(f"Found {len(smiles_list)} valid SMILES to process.")
 
-# Create a generator for chunking the data
-def chunk_data(df, chunk_size):
-    for i in range(0, len(df), chunk_size):
-        yield df.iloc[i:i + chunk_size]
+                    all_embeddings = []
+                    for i in range(0, len(smiles_list), batch_size):
+                        batch = smiles_list[i:i+batch_size]
+                        embeddings = get_unimol_embeddings_batch(batch, unimol_model)
+                        if embeddings is not None:
+                            all_embeddings.append(embeddings)
+                        else:
+                            print(f"Warning: Batch {i//batch_size} failed.")
 
-# Process each chunk
-output_file_prefix = "/home/g3bbmproject/main_folder/M^3-Datasets-20241215T191503Z-001/M^3-Datasets/graph_embed_data/new_graph_embeddings_based_on_kg_erva"
+                    if all_embeddings:
+                        final_embeddings = np.concatenate(all_embeddings)
+                        output_file = os.path.join(root, f"{os.path.splitext(file)[0]}_graph_embedding.npy")
+                        np.save(output_file, final_embeddings)
+                        print(f"Saved embeddings with shape {final_embeddings.shape} to {output_file}\n")
+                    else:
+                        print(f"No embeddings generated for {file_path}.")
 
-total_chunks = (len(df) // chunk_size) + 1
-print(f"Total chunks to process: {total_chunks}")
+                except Exception as e:
+                    print(f"Failed to process {file_path}: {e}\n")
 
-# Verify GPU availability
-device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+folder_path = "/home/g3-bbm-project/main_folder/FineTune/finetune_data_multi/finetuning_datasets/classification"  # Set your top-level folder here
+print(f"Starting UniMol embedding processing at {datetime.now().strftime('%H:%M:%S')}")
+start_time = time.time()
 
-for idx, chunk in enumerate(chunk_data(df, chunk_size)):
-    print(f"Processing chunk {idx + 1} of {total_chunks}...")
+process_folder_unimol(folder_path)
 
-    # Generate embeddings
-    chunk['unimol_embeddings'] = chunk['smiles'].apply(lambda x: get_unimol_embeddings(x, unimol_model))
-
-    # Drop rows where embeddings failed
-    chunk = chunk[chunk['unimol_embeddings'].notnull()]
-
-    # Save the chunk as a NumPy file
-    chunk_output_file = f"{output_file_prefix}_chunk_{idx + 1}.npy"
-    embeddings_array = np.array(chunk['unimol_embeddings'].tolist())
-    np.save(chunk_output_file, embeddings_array)
-    print(f"Chunk {idx + 1} saved to {chunk_output_file}")
-
-    # Log progress
-    print(f"Completed {((idx + 1) / total_chunks) * 100:.2f}% of processing.")
-
-print("All chunks processed and saved.")
+total_time = time.time() - start_time
+print(f"\nTotal execution time: {total_time:.2f} seconds")
+print(f"Finished at {datetime.now().strftime('%H:%M:%S')}")
