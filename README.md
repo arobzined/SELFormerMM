@@ -125,10 +125,12 @@ Train
 
 File: bbbp_classification.py
 
+```python
 python bbbp_classification.py \
   --use_scaffold 1 \
   --lr 1e-4 \
   --epochs 100
+```
 
 Arguments
 
@@ -146,19 +148,24 @@ Predict
 File: bbbp_prediction.py
 
 Predict using a CSV:
+
+```python 
 python bbbp_prediction.py \
   --model_path path/to/multimodal_BBBP_classifier_sd.pt \
   --tokenizer_path path/to/BBBP_tokenizer_dir \
   --input_file data/bbbp_test_smiles.csv \
   --output_dir outputs/bbbp_preds
+```
 
 Predict a single SMILES:
+
+```python
 python bbbp_prediction.py \
   --model_path path/to/multimodal_BBBP_classifier_sd.pt \
   --tokenizer_path path/to/BBBP_tokenizer_dir \
   --smiles "CCOC(=O)NCCC1=CNc2c1cc(OC)cc2" \
   --output_dir outputs/bbbp_single
-
+```
 
 Outputs
 
@@ -179,11 +186,12 @@ hiv_classification.py
 
 hiv_classification_arc.py (architecture-extended version)
 
+```python
 python hiv_classification.py \
   --use_scaffold 1 \
   --lr 3e-4 \
   --epochs 50
-
+```
 
 Arguments
 
@@ -198,19 +206,24 @@ Predict
 File: hiv_prediction.py
 
 From CSV:
+
+```python
 python hiv_prediction.py \
   --model_path path/to/hiv_classifier_sd.pt \
   --tokenizer_path path/to/HIV_tokenizer_dir \
   --input_file data/hiv_test_smiles.csv \
   --output_dir outputs/hiv_preds
+```
 
 Single SMILES:
+
+```python
 python hiv_prediction.py \
   --model_path path/to/hiv_classifier_sd.pt \
   --tokenizer_path path/to/HIV_tokenizer_dir \
   --smiles "CC1=C(C(=O)NC(=O)N1)N" \
   --output_dir outputs/hiv_single
-
+```
 
 Outputs
 
@@ -218,7 +231,7 @@ predictions.csv — multi-label predictions (sigmoid + thresholding)
 
 embeddings.npy — multimodal latent vectors
 
-🧿 3. PDBBind — Regression
+3. PDBBind — Regression
 Task Summary
 
 The PDBBind example predicts continuous binding affinities for protein–ligand complexes.
@@ -228,9 +241,11 @@ Train
 
 File: regression_pdbbind_with_wandb.py
 
+```python
 python regression_pdbbind_with_wandb.py \
   --lr 2e-5 \
   --epochs 100
+```
 
 Arguments
 
@@ -243,6 +258,8 @@ Predict
 File: pdbbind_prediction.py
 
 Using CSV + embeddings:
+
+```python
 python pdbbind_prediction.py \
   --model_path path/to/pdbbind_regressor_sd.pt \
   --tokenizer_path path/to/epoch_266/hf \
@@ -251,13 +268,17 @@ python pdbbind_prediction.py \
   --text_embs data/pdbbind_text_embs.npy \
   --kg_embs data/pdbbind_kg_embs.npy \
   --output_dir outputs/pdbbind_preds
+```
 
 Single SMILES (no external embeddings):
+
+```python
 python pdbbind_prediction.py \
   --model_path path/to/pdbbind_regressor_sd.pt \
   --tokenizer_path path/to/epoch_266/hf \
   --smiles "CC(C)CC1=CC(=O)NC(=O)N1" \
   --output_dir outputs/pdbbind_single
+```
 
 Outputs
 
